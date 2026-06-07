@@ -1,8 +1,8 @@
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
 use serde::Deserialize;
-use std::{error, time};
 use std::time::Instant;
+use std::{error, time};
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
@@ -38,6 +38,13 @@ struct EventEnvelope {
     envelope_id: String,
     r#type: String,
     payload: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(unused)]
+struct CatFact {
+    fact: String,
+    length: u32,
 }
 
 impl Bot {
@@ -142,7 +149,10 @@ impl Bot {
                 }
 
                 if envelope.r#type == "slash_commands" {
-                    if self.handle_commands(&envelope, &ack_payload, &mut write_half).await {
+                    if self
+                        .handle_commands(&envelope, &ack_payload, &mut write_half)
+                        .await
+                    {
                         continue;
                     }
                 }
@@ -167,17 +177,34 @@ impl Bot {
         S: futures_util::Sink<Message> + Unpin,
         <S as futures_util::Sink<Message>>::Error: std::fmt::Debug,
     {
-        let Some(ref inner_payload) = envelope.payload else { return false; };
-        let Some(command) = inner_payload.get("command").and_then(|c| c.as_str()) else { return false; };
+        let Some(ref inner_payload) = envelope.payload else {
+            return false;
+        };
+        let Some(command) = inner_payload.get("command").and_then(|c| c.as_str()) else {
+            return false;
+        };
 
-        if command == "/fbh-ping" {
+        if command == "/fbh-help" {
+            let _ = write_half.send(Message::Text(
+                serde_json::json!({
+                    "envelope_id": envelope.envelope_id,
+                    "payload": {
+                        "response_type": "ephemeral",
+                        "text": "A very simple Slack bot. Only cool because it's written without any Slack SDK wrappers. Commands:\n   /fbh-help - this\n   /fbh-ping - get the current latency\n   /fbh-catfact - get a random cat fact\n   /fbh-catimg - get a random cat :3",
+                    }
+                }).to_string().into(),
+            )).await;
+
+            true
+        } else if command == "/fbh-ping" {
             // satisfy websocket by sending ack
             let _ = write_half
                 .send(Message::Text(ack_payload.to_string().into()))
                 .await;
 
             // respond directly
-            let Some(response_url) = inner_payload.get("response_url").and_then(|r| r.as_str()) else {
+            let Some(response_url) = inner_payload.get("response_url").and_then(|r| r.as_str())
+            else {
                 return true;
             };
 
@@ -185,9 +212,9 @@ impl Bot {
 
             let client = reqwest::Client::new();
             let http_payload = serde_json::json!({
-            "response_type": "ephemeral",
-            "text": "Calculating..."
-        });
+                "response_type": "ephemeral",
+                "text": "Calculating..."
+            });
 
             let response = client.post(response_url).json(&http_payload).send().await;
 
@@ -195,15 +222,69 @@ impl Bot {
 
             if response.is_ok() {
                 let update_payload = serde_json::json!({
-                "response_type": "ephemeral",
-                "text": format!("Pong!\nLatency: {}ms", latency)
-            });
-                let _ = client
-                    .post(response_url)
-                    .json(&update_payload)
-                    .send()
-                    .await;
+                    "response_type": "ephemeral",
+                    "text": format!("Pong!\nLatency: {}ms", latency)
+                });
+                let _ = client.post(response_url).json(&update_payload).send().await;
             }
+            true
+        } else if command == "/fbh-catfact" {
+            let _ = write_half
+                .send(Message::Text(ack_payload.to_string().into()))
+                .await;
+
+            let Some(response_url) = inner_payload.get("response_url").and_then(|r| r.as_str())
+            else {
+                return true;
+            };
+
+            let client = reqwest::Client::new();
+
+            let message_text = match client.get("https://catfact.ninja/fact").send().await {
+                Ok(response) => {
+                    if let Ok(cat_fact) = response.json::<CatFact>().await {
+                        cat_fact.fact
+                    } else {
+                        "Failed to parse the cat fact data.".to_string()
+                    }
+                }
+                Err(e) => format!("Error fetching cat fact: {}", e),
+            };
+
+            let http_payload = serde_json::json ! ({
+            "response_type": "ephemeral",
+            "text": message_text
+            });
+
+            let _ = client.post(response_url).json(&http_payload).send().await;
+
+            true
+        } else if command == "/fbh-catimg" {
+            let timestamp = time::SystemTime::now()
+                .duration_since(time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let cat_image_url = format!("https://cataas.com/cat/says/mrreow?ts={}", timestamp);
+
+            let combined_payload = serde_json::json!({
+                "envelope_id": envelope.envelope_id,
+                "payload": {
+                    "response_type": "ephemeral",
+                    "text": "*mrreow*",
+                    "blocks": [
+                        {
+                            "type": "image",
+                            "image_url": cat_image_url,
+                            "alt_text": "A random cute cat"
+                        }
+                    ]
+                }
+            });
+
+            let _ = write_half
+                .send(Message::Text(combined_payload.to_string().into()))
+                .await;
+
             true
         } else {
             false
