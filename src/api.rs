@@ -79,7 +79,7 @@ impl Bot {
                 Ok(url) => url,
                 Err(e) => {
                     error!("Failed to fetch WS URL: {}. Retrying in 5 seconds...", e);
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(time::Duration::from_secs(5)).await;
                     continue;
                 }
             };
@@ -89,7 +89,7 @@ impl Bot {
                 Ok(stream) => stream,
                 Err(e) => {
                     error!("Failed to connect: {}. Retrying in 5 seconds...", e);
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(time::Duration::from_secs(5)).await;
                     continue;
                 }
             };
@@ -153,7 +153,7 @@ impl Bot {
             }
 
             warn!("Connection lost. Reconnecting to Slack in 3 seconds...");
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            tokio::time::sleep(time::Duration::from_secs(3)).await;
         }
     }
 
