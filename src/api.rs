@@ -3,6 +3,8 @@ use log::{debug, error, info, warn};
 use serde::Deserialize;
 use std::time::Instant;
 use std::{error, time};
+use tokio::net::TcpListener; // <-- Added for dummy server
+use tokio::io::AsyncWriteExt; // <-- Added for dummy server
 use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
@@ -10,6 +12,7 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 struct Globals {
     app_token: String,
     _bot_user_oauth_token: String,
+    port: String, // <-- Added to capture Render's injected PORT
 }
 
 impl Globals {
@@ -17,6 +20,8 @@ impl Globals {
         Ok(Globals {
             app_token: dotenv::var("APP_TOKEN")?,
             _bot_user_oauth_token: dotenv::var("BOT_USER_OAUTH_TOKEN")?,
+            // Render binds to random ports but maps them externally. Default to "80" if not specified.
+            port: std::env::var("PORT").unwrap_or_else(|_| "80".to_string()),
         })
     }
 }
@@ -61,6 +66,29 @@ impl Bot {
         Bot { keys: globals }
     }
 
+    async fn start_dummy_server(port: String) {
+        let addr = format!("0.0.0.0:{}", port);
+        let listener = match TcpListener::bind(&addr).await {
+            Ok(l) => l,
+            Err(e) => {
+                error!("Failed to bind dummy web server to {}: {}", addr, e);
+                return;
+            }
+        };
+
+        info!("Dummy web server listening on http://{}", addr);
+
+        loop {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let response = "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nContent-Type: text/plain\r\n\r\nBot Online!";
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        }
+    }
+
     async fn fetch_ws_url(&self) -> Result<String, Box<dyn error::Error>> {
         let client = reqwest::Client::new();
         let res: AppsConnectionsOpenResponse = client
@@ -80,6 +108,12 @@ impl Bot {
     }
 
     pub async fn start(self) -> Result<(), Box<dyn error::Error>> {
+        // dummy web server
+        let dummy_port = self.keys.port.clone();
+        tokio::spawn(async move {
+            Self::start_dummy_server(dummy_port).await;
+        });
+
         loop {
             info!("Fetching WebSocket URL...");
             let ws_url = match self.fetch_ws_url().await {
